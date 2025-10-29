@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Проверка фото • JPEG/HEIC/AVIF + Motion/Live</title>
+<title>Проверка фото • JPEG/HEIC/AVIF + Motion/Live/Progressive</title>
 <style>
   :root{--bg:#0b0f14;--fg:#e9eef4;--mut:#9fb3c8;--card:#131a22;--ok:#27c093;--warn:#f5b301;--bad:#ff6b6b}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial}
@@ -26,11 +26,11 @@
 <body>
 <div class="wrap">
   <h1>Проверка фото</h1>
-  <p>Выберите изображение (камера / медиатека / файлы). Покажем формат по сигнатуре, размеры, HEX и <b>детектор Motion/Live</b>.</p>
+  <p>Выберите изображение (камера / медиатека / файлы). Покажем формат по сигнатуре, размеры, HEX и <b>детектор Motion/Live/Progressive</b>.</p>
 
   <div class="card">
     <input id="file" type="file" accept="image/*">
-    <div class="small">Подсказка: на Android/iOS появится системное меню — можно выбрать «Камера», «Фото», «Файлы».</div>
+    <div class="small">Совет: в Android/iOS появится меню системы — «Камера», «Фото», «Файлы».</div>
   </div>
 
   <div id="out" class="grid" hidden>
@@ -42,13 +42,21 @@
       <div class="row"><span class="k">Размер</span><span id="size" class="v"></span></div>
       <div class="row"><span class="k">Пиксели</span><span id="wh" class="v"></span></div>
       <div class="row"><span class="k">Формат по сигнатуре</span><span id="fmt" class="v"></span></div>
-      <div class="row"><span class="k">Детектор Motion/Live</span><span id="motion" class="v status"></span></div>
+      <div class="row"><span class="k">JPEG режим</span><span id="jpegMode" class="v"></span></div>
+      <div class="row"><span class="k">Motion/Live детектор</span><span id="motion" class="v status"></span></div>
+      <div class="row"><span class="k">Аномальный вес</span><span id="weight" class="v status"></span></div>
       <details style="margin-top:8px">
         <summary>Первые байты (HEX)</summary>
         <div id="hex" class="sig v" style="margin-top:6px"></div>
       </details>
+      <details style="margin-top:8px">
+        <summary>Хвост файла (последние 256 байт, HEX)</summary>
+        <div id="tailhex" class="sig v" style="margin-top:6px"></div>
+      </details>
       <a id="copy" class="btn" href="#">Скопировать отчёт</a>
-      <div class="small" style="margin-top:8px">Примечание: для iOS Live Photo видео хранится отдельным MOV-файлом; здесь мы показываем эвристику по XMP/EXIF кадра.</div>
+      <div class="small" style="margin-top:8px">
+        Примечание: у iOS Live Photo видео хранится отдельным MOV; здесь — эвристика по XMP/EXIF/маркеру контейнера.
+      </div>
     </div>
     <div class="card">
       <h2 style="margin:0 0 8px">Превью</h2>
@@ -63,7 +71,8 @@ const el = {
   file: $('#file'), out: $('#out'),
   name: $('#name'), ext: $('#ext'), mime: $('#mime'), size: $('#size'),
   wh: $('#wh'), fmt: $('#fmt'), motion: $('#motion'), hex: $('#hex'),
-  copy: $('#copy'), preview: $('#preview')
+  tailhex: $('#tailhex'), copy: $('#copy'), preview: $('#preview'),
+  jpegMode: $('#jpegMode'), weight: $('#weight')
 };
 
 el.file.addEventListener('change', async () => {
@@ -76,47 +85,38 @@ el.file.addEventListener('change', async () => {
   el.mime.textContent = f.type || '(пусто)';
   el.size.textContent = `${f.size} B ≈ ${(f.size/1024/1024).toFixed(2)} MB`;
 
-  // SIG / HEX
-  const head = new Uint8Array(await f.slice(0, 64).arrayBuffer());
-  el.hex.textContent = [...head].map(b => b.toString(16).padStart(2,'0')).join(' ');
+  // head/tail
+  const head = new Uint8Array(await f.slice(0, 96).arrayBuffer());
+  const tailLen = Math.min(256, f.size);
+  const tail = new Uint8Array(await f.slice(f.size - tailLen, f.size).arrayBuffer());
+  el.hex.textContent = toHex(head);
+  el.tailhex.textContent = toHex(tail);
 
-  // Format by magic
-  const sig = detectFormat(head);
-  el.fmt.textContent = sig;
+  // format
+  const sigLabel = detectFormat(head);
+  el.fmt.textContent = sigLabel;
 
-  // Preview + dimensions
+  // preview + dimensions
   el.wh.textContent = '…';
   el.preview.innerHTML = '';
   const url = URL.createObjectURL(f);
   const img = new Image();
-  img.onload = () => { el.wh.textContent = `${img.naturalWidth} × ${img.naturalHeight}px`; el.preview.append(img); URL.revokeObjectURL(url); };
-  img.onerror = () => { el.wh.textContent = '(не декодируется в этом WebView)'; URL.revokeObjectURL(url); };
+  img.onload = () => { el.wh.textContent = `${img.naturalWidth} × ${img.naturalHeight}px`; el.preview.append(img); URL.revokeObjectURL(url); postSizeChecks(f, img.naturalWidth, img.naturalHeight, head, tail); };
+  img.onerror = () => { el.wh.textContent = '(не декодируется в этом WebView)'; URL.revokeObjectURL(url); postSizeChecks(f, 0, 0, head, tail); };
+
   img.src = url;
 
-  // Motion/Live detection (JPEG XMP scan + simple HEIC heuristic)
-  const motion = await detectMotionLike(f);
+  // Motion/Live detection (расширенная)
+  const motion = await detectMotionLike(f, head, tail);
   el.motion.textContent = motion.label;
   el.motion.className = 'v status ' + motion.level;
 
-  el.copy.onclick = (e) => {
-    e.preventDefault();
-    const txt = [
-      `Имя: ${el.name.textContent}`,
-      `Расширение: ${el.ext.textContent}`,
-      `MIME: ${el.mime.textContent}`,
-      `Размер: ${el.size.textContent}`,
-      `Пиксели: ${el.wh.textContent}`,
-      `Формат (сигнатура): ${el.fmt.textContent}`,
-      `Motion/Live: ${motion.label}`,
-      `HEX: ${el.hex.textContent}`
-    ].join('\n');
-    navigator.clipboard?.writeText(txt).then(()=> el.copy.textContent='Скопировано ✓')
-      .catch(()=> alert('Не удалось скопировать'));
-    setTimeout(()=> el.copy.textContent='Скопировать отчёт', 1200);
-  };
+  // JPEG baseline/progressive
+  el.jpegMode.textContent = await jpegMode(f, head);
 });
 
-// --- helpers ---
+function toHex(u8){ return [...u8].map(b=>b.toString(16).padStart(2,'0')).join(' '); }
+
 function detectFormat(u8){
   const s = (o,l)=>String.fromCharCode(...u8.slice(o,o+l));
   if (u8[0]===0xff && u8[1]===0xd8 && u8[2]===0xff) return 'JPEG';
@@ -133,68 +133,93 @@ function detectFormat(u8){
   return 'Неизвестно';
 }
 
-// Скан JPEG на XMP: ищем APP1 с префиксом XMP и проверяем ключи GCamera/Apple
-async function detectMotionLike(file){
+async function detectMotionLike(file, head, tail){
   const mime = (file.type||'').toLowerCase();
-  const nameExt = (file.name.match(/\.(\w+)$/)?.[1] || '').toLowerCase();
+  const ext  = (file.name.match(/\.(\w+)$/)?.[1] || '').toLowerCase();
 
-  // HEIC с Live (эвристика): один файл сам по себе обычно обычный кадр, но пометим "возможен Live"
-  if (/heic|heif/.test(mime) || /heic|heif/.test(nameExt)) {
-    // Внутри HEIC Live-видео хранится отдельно (обычно .mov), поэтому здесь только предупреждение
-    return { label:'HEIC: возможен Live Photo (проверь парную MOV/видео часть)', level:'warn' };
+  // HEIC → возможен Live (видео отдельно)
+  if (/heic|heif/.test(mime) || /heic|heif/.test(ext)) {
+    return { label:'HEIC: возможен Live Photo (видео — отдельный MOV)', level:'warn' };
   }
 
-  // Для JPEG попробуем извлечь APP1(XMP)
-  const isJpeg = await startsWith(file, [0xff,0xd8,0xff]);
-  if (!isJpeg) return { label:'обычное фото (признаков нет)', level:'ok' };
+  // JPEG: сначала XMP
+  if (!(head[0]===0xff && head[1]===0xd8 && head[2]===0xff))
+    return { label:'обычное фото (признаков нет)', level:'ok' };
 
-  const xmp = await extractXmpFromJpeg(file, 1024*256); // читаем до 256Кб, хватает для APP1
-  if (!xmp) return { label:'обычное фото (XMP не найден)', level:'ok' };
-
-  const x = xmp.toLowerCase();
-
-  // Pixel / Google Motion Photo (наиболее надёжные признаки)
-  if (x.includes('gcamera:motionphoto') || x.includes('gcamera:microvideo') || x.includes('microvideooffset')) {
-    return { label:'НАЙДЕНО: Motion Photo (Pixel/Android)', level:'bad' };
+  const xmp = await extractXmpFromJpeg(file, 262144);
+  if (xmp) {
+    const x = xmp.toLowerCase();
+    if (x.includes('gcamera:motionphoto') || x.includes('gcamera:microvideo') || x.includes('microvideooffset')) {
+      return { label:'НАЙДЕНО: Motion Photo (Pixel/Android, XMP)', level:'bad' };
+    }
+    if (x.includes('livephoto') || x.includes('contentidentifier') || x.includes('com.apple') || x.includes('makerapple')) {
+      return { label:'Подозрение: iOS Live Photo (признаки в XMP/EXIF)', level:'warn' };
+    }
   }
 
-  // iOS Live Photo (только эвристика по XMP/EXIF строкам)
-  if (x.includes('livephoto') || x.includes('contentidentifier') || x.includes('com.apple') || x.includes('apple')) {
-    return { label:'Подозрение: iOS Live Photo (видео — отдельный MOV)', level:'warn' };
+  // Доп. проверка: хвост JPEG содержит MP4-боксы → Motion без XMP
+  const tailStr = new TextDecoder().decode(tail);
+  const hasMP4Box = /ftyp|moov|mdat|mp4|isom|iso5|heic/i.test(tailStr);
+  if (hasMP4Box) {
+    return { label:'НАЙДЕНО: Motion-хвост в JPEG (без XMP)', level:'bad' };
   }
 
   return { label:'обычное фото (признаков нет)', level:'ok' };
 }
 
-async function startsWith(file, sig){
-  const buf = new Uint8Array(await file.slice(0, sig.length).arrayBuffer());
-  if (buf.length < sig.length) return false;
-  return sig.every((b,i)=>buf[i]===b);
-}
-
-// Упрощённый парсер сегментов JPEG для извлечения XMP (APP1 с "http://ns.adobe.com/xap/1.0/")
-async function extractXmpFromJpeg(file, maxScanBytes=262144){
-  const buf = new Uint8Array(await file.slice(0, maxScanBytes).arrayBuffer());
-  let i = 2; // пропускаем SOI (FF D8)
+// Упрощённый парсер сегментов JPEG для XMP
+async function extractXmpFromJpeg(file, maxBytes){
+  const buf = new Uint8Array(await file.slice(0, maxBytes).arrayBuffer());
+  let i = 2; // SOI
   while (i + 4 <= buf.length && buf[i] === 0xFF) {
-    const marker = buf[i+1];
-    i += 2;
-    if (marker === 0xDA) break; // SOS — дальше пиксели, прекращаем
+    const marker = buf[i+1]; i += 2;
+    if (marker === 0xDA) break; // SOS
     const len = (buf[i]<<8) + buf[i+1]; i += 2;
     if (len < 2 || i+len-2 > buf.length) break;
-    const segment = buf.slice(i, i+len-2);
+    const seg = buf.slice(i, i+len-2);
     i += (len-2);
-    // APP1 (EXIF/XMP)
     if (marker === 0xE1) {
-      const pre = new TextDecoder().decode(segment.slice(0, 29));
+      const pre = new TextDecoder().decode(seg.slice(0, 29));
       if (pre.startsWith('http://ns.adobe.com/xap/1.0/')) {
-        // дальше идёт XML XMP
-        return new TextDecoder().decode(segment.slice(29));
+        return new TextDecoder().decode(seg.slice(29));
       }
     }
   }
   return null;
 }
+
+// JPEG baseline/progressive по маркерам SOF0/SOF2
+async function jpegMode(file, head){
+  const isJpeg = head[0]===0xff && head[1]===0xd8 && head[2]===0xff;
+  if (!isJpeg) return '—';
+  const buf = new Uint8Array(await file.slice(0, Math.min(512*1024, file.size)).arrayBuffer());
+  let i = 2;
+  while (i + 4 <= buf.length && buf[i] === 0xFF) {
+    const marker = buf[i+1]; i += 2;
+    if (marker === 0xDA) break;
+    const len = (buf[i]<<8) + buf[i+1]; i += 2;
+    if (len < 2 || i+len-2 > buf.length) break;
+    if (marker === 0xC0) return 'Baseline (SOF0)';
+    if (marker === 0xC2) return 'Progressive (SOF2)';
+    i += (len-2);
+  }
+  return 'Не удалось определить';
+}
+
+// Эвристика «аномальный вес» после получения размеров
+function postSizeChecks(file, w, h, head, tail){
+  if (!w || !h) { el.weight.textContent = 'недоступно (нет размеров)'; el.weight.className='v status warn'; return; }
+  // bytes per pixel эвристика: JPEG с качеством 0.85 обычно 0.4–1.2 B/px (зависит от сцены).
+  const bpp = file.size / (w*h);
+  // Смягчённые пороги:
+  let label = `${bpp.toFixed(3)} B/px — норма`;
+  let cls = 'ok';
+  if (bpp > 1.5) { label = `${bpp.toFixed(3)} B/px — тяжёлый JPEG (возможен Motion/Progressive/пересжатие)`; cls='warn'; }
+  if (bpp > 2.5) { label = `${bpp.toFixed(3)} B/px — аномально большой (проверь Motion/хвост MP4)`; cls='bad'; }
+  el.weight.textContent = label;
+  el.weight.className = 'v status ' + cls;
+}
+
 </script>
 </body>
 </html>
