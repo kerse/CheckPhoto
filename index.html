@@ -1,225 +1,200 @@
 <!doctype html>
 <html lang="ru">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Проверка фото (HEIC/AVIF/JPEG и т.п.)</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Проверка фото • JPEG/HEIC/AVIF + Motion/Live</title>
 <style>
-  :root{--bg:#0b0f14;--fg:#e9eef4;--mut:#9fb3c8;--card:#131a22;--ok:#2aa198;--bad:#ff6b6b}
-  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Arial}
-  .wrap{max-width:900px;margin:0 auto;padding:20px}
-  h1{font-size:20px;margin:0 0 10px}
-  p{color:var(--mut);margin:0 0 16px}
-  .card{background:var(--card);border-radius:16px;padding:16px;box-shadow:0 6px 24px rgba(0,0,0,.3);margin:12px 0}
+  :root{--bg:#0b0f14;--fg:#e9eef4;--mut:#9fb3c8;--card:#131a22;--ok:#27c093;--warn:#f5b301;--bad:#ff6b6b}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial}
+  .wrap{max-width:920px;margin:0 auto;padding:20px}
+  h1{font-size:20px;margin:0 0 6px}
+  p{color:var(--mut);margin:0 0 14px}
+  .card{background:var(--card);border-radius:16px;padding:16px;box-shadow:0 6px 24px rgba(0,0,0,.28);margin:12px 0}
   input[type=file]{width:100%;border:1px dashed #3a5068;border-radius:12px;padding:14px;background:rgba(255,255,255,.02);color:var(--fg)}
-  .grid{display:grid;grid-template-columns:1fr;gap:10px}
-  .row{display:flex;justify-content:space-between;gap:12px}
-  .k{color:var(--mut)}
-  .v{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
+  .row{display:flex;justify-content:space-between;gap:12px;margin:6px 0}
+  .k{color:var(--mut)} .v{font-family:ui-monospace,Menlo,Consolas,monospace}
   .sig{word-break:break-all}
-  .status.ok{color:var(--ok)} .status.bad{color:var(--bad)}
-  img,canvas{max-width:100%;height:auto;border-radius:12px;background:#000}
+  .status.ok{color:var(--ok)} .status.warn{color:var(--warn)} .status.bad{color:var(--bad)}
+  .grid{display:grid;grid-template-columns:1fr;gap:12px}
+  @media(min-width:720px){.grid{grid-template-columns:1fr 1fr}}
   .btn{display:inline-block;margin-top:8px;padding:10px 14px;border-radius:12px;background:#1e2936;color:#dce7f3;text-decoration:none;border:1px solid #33475f}
   .small{font-size:12px;color:var(--mut)}
-  @media (min-width:700px){.grid{grid-template-columns:1fr 1fr}}
+  img{max-width:100%;height:auto;border-radius:12px;background:#000}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>Проверка фото на устройстве</h1>
-  <p>Выберите изображение из камеры, медиатеки или файлов. Мы покажем фактический формат по «магическим байтам», даже если расширение <code>.jpg</code>, а внутри HEIC/AVIF.</p>
+  <h1>Проверка фото</h1>
+  <p>Выберите изображение (камера / медиатека / файлы). Покажем формат по сигнатуре, размеры, HEX и <b>детектор Motion/Live</b>.</p>
 
   <div class="card">
-    <input id="file" type="file" accept="image/*" />
-    <label class="small">Совет: на iOS/Android появится меню выбора камеры / фото / файлов.</label>
+    <input id="file" type="file" accept="image/*">
+    <div class="small">Подсказка: на Android/iOS появится системное меню — можно выбрать «Камера», «Фото», «Файлы».</div>
   </div>
 
   <div id="out" class="grid" hidden>
     <div class="card">
-      <h2 style="margin-top:0">Сводка</h2>
-      <div class="row"><span class="k">Имя файла</span><span id="name" class="v"></span></div>
+      <h2 style="margin:0 0 8px">Сводка</h2>
+      <div class="row"><span class="k">Имя</span><span id="name" class="v"></span></div>
       <div class="row"><span class="k">Расширение</span><span id="ext" class="v"></span></div>
-      <div class="row"><span class="k">MIME (от браузера)</span><span id="mime" class="v"></span></div>
+      <div class="row"><span class="k">MIME (браузер)</span><span id="mime" class="v"></span></div>
       <div class="row"><span class="k">Размер</span><span id="size" class="v"></span></div>
-      <div class="row"><span class="k">Последнее изменение</span><span id="lm" class="v"></span></div>
-      <div class="row"><span class="k">Определённый формат (по сигнатуре)</span><span id="fmt" class="v status"></span></div>
-      <div class="row"><span class="k">Пиксели (если декодируется)</span><span id="wh" class="v"></span></div>
-      <div class="row"><span class="k">Первые байты (hex)</span></div>
-      <div class="sig v" id="hex"></div>
+      <div class="row"><span class="k">Пиксели</span><span id="wh" class="v"></span></div>
+      <div class="row"><span class="k">Формат по сигнатуре</span><span id="fmt" class="v"></span></div>
+      <div class="row"><span class="k">Детектор Motion/Live</span><span id="motion" class="v status"></span></div>
+      <details style="margin-top:8px">
+        <summary>Первые байты (HEX)</summary>
+        <div id="hex" class="sig v" style="margin-top:6px"></div>
+      </details>
       <a id="copy" class="btn" href="#">Скопировать отчёт</a>
+      <div class="small" style="margin-top:8px">Примечание: для iOS Live Photo видео хранится отдельным MOV-файлом; здесь мы показываем эвристику по XMP/EXIF кадра.</div>
     </div>
-
     <div class="card">
-      <h2 style="margin-top:0">Превью</h2>
-      <div id="previewWrap">
-        <p class="small">Если формат не поддерживается WebView, превью может не отобразиться — это уже косвенное подтверждение.</p>
-      </div>
+      <h2 style="margin:0 0 8px">Превью</h2>
+      <div id="preview"></div>
     </div>
   </div>
 </div>
 
 <script>
-const $ = sel => document.querySelector(sel);
-const input = $('#file');
-const out = $('#out');
+const $ = s => document.querySelector(s);
 const el = {
+  file: $('#file'), out: $('#out'),
   name: $('#name'), ext: $('#ext'), mime: $('#mime'), size: $('#size'),
-  lm: $('#lm'), fmt: $('#fmt'), wh: $('#wh'), hex: $('#hex'),
-  copy: $('#copy'), previewWrap: $('#previewWrap')
+  wh: $('#wh'), fmt: $('#fmt'), motion: $('#motion'), hex: $('#hex'),
+  copy: $('#copy'), preview: $('#preview')
 };
 
-input.addEventListener('change', async () => {
-  const f = input.files && input.files[0];
+el.file.addEventListener('change', async () => {
+  const f = el.file.files && el.file.files[0];
   if (!f) return;
-  out.hidden = false;
+  el.out.hidden = false;
 
-  // Базовые поля
   el.name.textContent = f.name || '(без имени)';
   el.ext.textContent  = (f.name.match(/\.(\w+)$/)?.[1] || '(нет)').toLowerCase();
   el.mime.textContent = f.type || '(пусто)';
-  el.size.textContent = `${f.size} B  ≈ ${(f.size/1024/1024).toFixed(2)} MB`;
-  el.lm.textContent   = f.lastModified ? new Date(f.lastModified).toLocaleString() : '(нет данных)';
+  el.size.textContent = `${f.size} B ≈ ${(f.size/1024/1024).toFixed(2)} MB`;
 
-  // Читаем первые 32 байта
-  const headLen = 32;
-  const buf = await f.slice(0, headLen).arrayBuffer();
-  const bytes = new Uint8Array(buf);
-  el.hex.textContent = [...bytes].map(b => b.toString(16).padStart(2,'0')).join(' ');
+  // SIG / HEX
+  const head = new Uint8Array(await f.slice(0, 64).arrayBuffer());
+  el.hex.textContent = [...head].map(b => b.toString(16).padStart(2,'0')).join(' ');
 
-  // Определяем формат по сигнатуре
-  const sig = detectFormat(bytes);
-  el.fmt.textContent = sig.label;
-  el.fmt.className = 'v status ' + (sig.suspicious ? 'bad' : 'ok');
+  // Format by magic
+  const sig = detectFormat(head);
+  el.fmt.textContent = sig;
 
-  // Пытаемся узнать размеры:
-  el.wh.textContent = '...';
-  try {
-    // createImageBitmap быстрее, но не везде доступен
-    const blobUrl = URL.createObjectURL(f);
-    const img = new Image();
-    img.onload = () => {
-      el.wh.textContent = `${img.naturalWidth} × ${img.naturalHeight}px`;
-      showPreview(img);
-      URL.revokeObjectURL(blobUrl);
-    };
-    img.onerror = () => {
-      el.wh.textContent = '(не удалось декодировать — формат не поддерживается WebView)';
-      showPreview(null);
-      URL.revokeObjectURL(blobUrl);
-    };
-    img.src = blobUrl;
-  } catch (e) {
-    el.wh.textContent = '(ошибка получения размеров)';
-  }
+  // Preview + dimensions
+  el.wh.textContent = '…';
+  el.preview.innerHTML = '';
+  const url = URL.createObjectURL(f);
+  const img = new Image();
+  img.onload = () => { el.wh.textContent = `${img.naturalWidth} × ${img.naturalHeight}px`; el.preview.append(img); URL.revokeObjectURL(url); };
+  img.onerror = () => { el.wh.textContent = '(не декодируется в этом WebView)'; URL.revokeObjectURL(url); };
+  img.src = url;
 
-  // Кнопка "скопировать отчёт"
-  el.copy.onclick = (ev) => {
-    ev.preventDefault();
-    const report = buildReport(f, sig, el.hex.textContent, el.wh.textContent);
-    navigator.clipboard?.writeText(report).then(()=> {
-      el.copy.textContent = 'Скопировано ✓';
-      setTimeout(()=> el.copy.textContent='Скопировать отчёт', 1200);
-    }).catch(()=> alert('Не удалось скопировать'));
+  // Motion/Live detection (JPEG XMP scan + simple HEIC heuristic)
+  const motion = await detectMotionLike(f);
+  el.motion.textContent = motion.label;
+  el.motion.className = 'v status ' + motion.level;
+
+  el.copy.onclick = (e) => {
+    e.preventDefault();
+    const txt = [
+      `Имя: ${el.name.textContent}`,
+      `Расширение: ${el.ext.textContent}`,
+      `MIME: ${el.mime.textContent}`,
+      `Размер: ${el.size.textContent}`,
+      `Пиксели: ${el.wh.textContent}`,
+      `Формат (сигнатура): ${el.fmt.textContent}`,
+      `Motion/Live: ${motion.label}`,
+      `HEX: ${el.hex.textContent}`
+    ].join('\n');
+    navigator.clipboard?.writeText(txt).then(()=> el.copy.textContent='Скопировано ✓')
+      .catch(()=> alert('Не удалось скопировать'));
+    setTimeout(()=> el.copy.textContent='Скопировать отчёт', 1200);
   };
 });
 
-function buildReport(f, sig, hex, wh) {
-  return [
-    `Имя: ${f.name}`,
-    `Расширение: ${(f.name.match(/\.(\w+)$/)?.[1] || '(нет)').toLowerCase()}`,
-    `MIME (браузер): ${f.type || '(пусто)'}`,
-    `Размер: ${f.size} B  ≈ ${(f.size/1024/1024).toFixed(2)} MB`,
-    `Последнее изменение: ${f.lastModified ? new Date(f.lastModified).toISOString() : '(нет)'}`,
-    `Формат по сигнатуре: ${sig.label}`,
-    `Подозрительно: ${sig.suspicious ? 'Да' : 'Нет'}`,
-    `Пиксели: ${wh}`,
-    `HEX(первые 32 байта): ${hex}`
-  ].join('\n');
+// --- helpers ---
+function detectFormat(u8){
+  const s = (o,l)=>String.fromCharCode(...u8.slice(o,o+l));
+  if (u8[0]===0xff && u8[1]===0xd8 && u8[2]===0xff) return 'JPEG';
+  if (u8[0]===0x89 && u8[1]===0x50 && u8[2]===0x4e && u8[3]===0x47) return 'PNG';
+  if (s(0,3)==='GIF') return 'GIF';
+  if (s(0,4)==='RIFF' && s(8,4)==='WEBP') return 'WEBP';
+  if (s(4,4)==='ftyp'){
+    const brand = s(8,4);
+    if (['heic','heix','heis','hevc','hevx','mif1','msf1'].includes(brand)) return `HEIC/HEIF (ftyp ${brand})`;
+    if (['avif','avis'].includes(brand)) return `AVIF (ftyp ${brand})`;
+    return `ISOBMFF (ftyp ${brand})`;
+  }
+  if (u8[0]===0x42 && u8[1]===0x4d) return 'BMP';
+  return 'Неизвестно';
 }
 
-// Вывод превью (если возможно)
-function showPreview(img) {
-  el.previewWrap.innerHTML = '';
-  if (img) {
-    img.style.maxWidth = '100%';
-    img.style.borderRadius = '12px';
-    el.previewWrap.append(img);
-  } else {
-    const p = document.createElement('p');
-    p.className = 'small';
-    p.textContent = 'Превью недоступно: формат не декодируется в данном WebView.';
-    el.previewWrap.append(p);
+// Скан JPEG на XMP: ищем APP1 с префиксом XMP и проверяем ключи GCamera/Apple
+async function detectMotionLike(file){
+  const mime = (file.type||'').toLowerCase();
+  const nameExt = (file.name.match(/\.(\w+)$/)?.[1] || '').toLowerCase();
+
+  // HEIC с Live (эвристика): один файл сам по себе обычно обычный кадр, но пометим "возможен Live"
+  if (/heic|heif/.test(mime) || /heic|heif/.test(nameExt)) {
+    // Внутри HEIC Live-видео хранится отдельно (обычно .mov), поэтому здесь только предупреждение
+    return { label:'HEIC: возможен Live Photo (проверь парную MOV/видео часть)', level:'warn' };
   }
+
+  // Для JPEG попробуем извлечь APP1(XMP)
+  const isJpeg = await startsWith(file, [0xff,0xd8,0xff]);
+  if (!isJpeg) return { label:'обычное фото (признаков нет)', level:'ok' };
+
+  const xmp = await extractXmpFromJpeg(file, 1024*256); // читаем до 256Кб, хватает для APP1
+  if (!xmp) return { label:'обычное фото (XMP не найден)', level:'ok' };
+
+  const x = xmp.toLowerCase();
+
+  // Pixel / Google Motion Photo (наиболее надёжные признаки)
+  if (x.includes('gcamera:motionphoto') || x.includes('gcamera:microvideo') || x.includes('microvideooffset')) {
+    return { label:'НАЙДЕНО: Motion Photo (Pixel/Android)', level:'bad' };
+  }
+
+  // iOS Live Photo (только эвристика по XMP/EXIF строкам)
+  if (x.includes('livephoto') || x.includes('contentidentifier') || x.includes('com.apple') || x.includes('apple')) {
+    return { label:'Подозрение: iOS Live Photo (видео — отдельный MOV)', level:'warn' };
+  }
+
+  return { label:'обычное фото (признаков нет)', level:'ok' };
 }
 
-/**
- * Определение формата по магическим байтам.
- * Возвращает { label, suspicious }.
- * suspicious=true — когда расширение/браузерный MIME не совпадают с фактической сигнатурой (например, .jpg, но HEIC/AVIF внутри)
- */
-function detectFormat(u8) {
-  const asStr = (start,len) => String.fromCharCode(...u8.slice(start, start+len));
-
-  // JPEG: FF D8 FF
-  if (u8[0] === 0xFF && u8[1] === 0xD8 && u8[2] === 0xFF)
-    return mk('JPEG');
-
-  // PNG: 89 50 4E 47 0D 0A 1A 0A
-  if (u8[0]===0x89 && u8[1]===0x50 && u8[2]===0x4E && u8[3]===0x47)
-    return mk('PNG');
-
-  // GIF: 47 49 46 38
-  if (asStr(0,3)==='GIF')
-    return mk('GIF');
-
-  // WEBP: RIFF....WEBP
-  if (asStr(0,4)==='RIFF' && asStr(8,4)==='WEBP')
-    return mk('WEBP', isSusp('webp'));
-
-  // AVIF/HEIC/HEIF: ISOBMFF with ftyp brand
-  if (asStr(4,4)==='ftyp') {
-    const brand = asStr(8,4);
-    const heifBrands = ['heic','heix','heis','hevc','hevx','mif1','msf1','heim','heis'];
-    const avifBrands = ['avif','avis'];
-    if (heifBrands.includes(brand)) return mk(`HEIC/HEIF (ftyp ${brand})`, isSusp('heic'));
-    if (avifBrands.includes(brand)) return mk(`AVIF (ftyp ${brand})`, isSusp('avif'));
-    return mk(`ISOBMFF (ftyp ${brand})`, true); // контейнер ISO BMFF — возможны варианты
-  }
-
-  // BMP
-  if (u8[0]===0x42 && u8[1]===0x4D) return mk('BMP');
-
-  // Неизвестно
-  return mk('Неизвестно', true);
-
-  function mk(label, suspicious = mismatchWithNameOrMime(label)) {
-    return { label, suspicious };
-  }
-  function mismatchWithNameOrMime(label){
-    const f = input.files && input.files[0];
-    if (!f) return false;
-    const nameExt = (f.name.match(/\.(\w+)$/)?.[1]||'').toLowerCase();
-    const mime = (f.type||'').toLowerCase();
-    const lbl = label.toLowerCase();
-
-    // если браузер говорит jpeg/png, но сигнатура heic/avif — подозрительно
-    if ((/jpeg|jpg/.test(nameExt) || /jpeg|jpg/.test(mime)) && /heic|avif|isobmff|heif/.test(lbl)) return true;
-    if ((/png/.test(nameExt) || /png/.test(mime)) && /heic|avif|webp/.test(lbl)) return true;
-
-    // пустой mime — уже повод
-    if (!mime) return true;
-
-    return false;
-  }
-  function isSusp(kind){
-    const f = input.files && input.files[0];
-    if (!f) return true;
-    const ext = (f.name.match(/\.(\w+)$/)?.[1]||'').toLowerCase();
-    const mime = (f.type||'').toLowerCase();
-    return !mime.includes(kind) || (ext && !ext.includes(kind));
-  }
+async function startsWith(file, sig){
+  const buf = new Uint8Array(await file.slice(0, sig.length).arrayBuffer());
+  if (buf.length < sig.length) return false;
+  return sig.every((b,i)=>buf[i]===b);
 }
 
+// Упрощённый парсер сегментов JPEG для извлечения XMP (APP1 с "http://ns.adobe.com/xap/1.0/")
+async function extractXmpFromJpeg(file, maxScanBytes=262144){
+  const buf = new Uint8Array(await file.slice(0, maxScanBytes).arrayBuffer());
+  let i = 2; // пропускаем SOI (FF D8)
+  while (i + 4 <= buf.length && buf[i] === 0xFF) {
+    const marker = buf[i+1];
+    i += 2;
+    if (marker === 0xDA) break; // SOS — дальше пиксели, прекращаем
+    const len = (buf[i]<<8) + buf[i+1]; i += 2;
+    if (len < 2 || i+len-2 > buf.length) break;
+    const segment = buf.slice(i, i+len-2);
+    i += (len-2);
+    // APP1 (EXIF/XMP)
+    if (marker === 0xE1) {
+      const pre = new TextDecoder().decode(segment.slice(0, 29));
+      if (pre.startsWith('http://ns.adobe.com/xap/1.0/')) {
+        // дальше идёт XML XMP
+        return new TextDecoder().decode(segment.slice(29));
+      }
+    }
+  }
+  return null;
+}
 </script>
 </body>
 </html>
