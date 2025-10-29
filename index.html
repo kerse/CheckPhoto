@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Проверка фото • JPEG/HEIC/AVIF + Motion/Live/Progressive • Нормализация</title>
+<title>Проверка фото • Нормализация → JPEG • Скачивание везде</title>
 <style>
   :root{--bg:#0b0f14;--fg:#e9eef4;--mut:#9fb3c8;--card:#131a22;--ok:#27c093;--warn:#f5b301;--bad:#ff6b6b}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial}
@@ -27,12 +27,12 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>Проверка фото + Нормализация</h1>
-  <p>Выберите изображение (камера / медиатека / файлы). Покажем формат по сигнатуре, размеры, HEX и детектор Motion/Live/Progressive. Можно «Нормализовать → JPEG ≤ 2048px» и скачать.</p>
+  <h1>Проверка фото + Нормализация → JPEG</h1>
+  <p>Выберите изображение (камера / медиатека / файлы). Чекер покажет формат по сигнатуре, размеры, HEX и детекторы Motion/Live/Progressive. Затем можно нормализовать и <b>принудительно скачать</b> JPEG ≤ 2048px.</p>
 
   <div class="card">
     <input id="file" type="file" accept="image/*">
-    <div class="small">Совет: на Android/iOS появится системное меню — «Камера», «Фото», «Файлы».</div>
+    <div class="small">Подсказка: на Android/iOS появится системное меню — «Камера», «Фото/Галерея», «Файлы».</div>
   </div>
 
   <div id="out" class="grid" hidden>
@@ -57,7 +57,8 @@
       </details>
       <div class="hr"></div>
       <button id="normalize" class="btn" disabled>Нормализовать → JPEG ≤ 2048px</button>
-      <div class="small">Нормализация: рендер в canvas (сброс EXIF/ориентации/хвостов Motion), JPEG quality 0.85. Если WebView не умеет декодировать исходник (например, HEIC на Android), нормализация на клиенте будет недоступна.</div>
+      <button id="downloadOriginal" class="btn" disabled>Скачать ОРИГИНАЛ</button>
+      <div class="small">Нормализация: canvas (сброс EXIF/ориентации/хвостов Motion), JPEG quality 0.85. Если исходник не декодируется в этом WebView (например, HEIC на Android) — нормализация недоступна.</div>
     </div>
 
     <div class="card">
@@ -70,7 +71,7 @@
         <div class="row"><span class="k">MIME</span><span id="n_mime" class="v"></span></div>
         <div class="row"><span class="k">Размер</span><span id="n_size" class="v"></span></div>
         <div class="row"><span class="k">Пиксели</span><span id="n_wh" class="v"></span></div>
-        <a id="download" class="btn" download="normalized.jpg">Скачать JPEG</a>
+        <button id="downloadNorm" class="btn">Скачать JPEG</button>
       </div>
     </div>
   </div>
@@ -83,18 +84,20 @@ const el = {
   name: $('#name'), ext: $('#ext'), mime: $('#mime'), size: $('#size'),
   wh: $('#wh'), fmt: $('#fmt'), motion: $('#motion'), hex: $('#hex'),
   tailhex: $('#tailhex'), preview: $('#preview'), jpegMode: $('#jpegMode'),
-  weight: $('#weight'), normalize: $('#normalize'),
-  normBox: $('#norm'), n_name: $('#n_name'), n_mime: $('#n_mime'),
-  n_size: $('#n_size'), n_wh: $('#n_wh'), download: $('#download')
+  weight: $('#weight'), normalize: $('#normalize'), normBox: $('#norm'),
+  n_name: $('#n_name'), n_mime: $('#n_mime'), n_size: $('#n_size'),
+  n_wh: $('#n_wh'), downloadNorm: $('#downloadNorm'), downloadOriginal: $('#downloadOriginal')
 };
 
-let lastImageDecoded = false; // сможем ли нормализовать на клиенте
+let lastDecoded = false;
+let lastImageBlobURL = null;
+let normalizedFile = null;
 
 el.file.addEventListener('change', async () => {
   const f = el.file.files && el.file.files[0];
   if (!f) return;
-  el.out.hidden = false; el.normBox.hidden = true; lastImageDecoded = false;
-  el.normalize.disabled = true;
+  el.out.hidden = false; el.normBox.hidden = true; lastDecoded = false; normalizedFile = null;
+  el.normalize.disabled = true; el.downloadOriginal.disabled = true;
 
   el.name.textContent = f.name || '(без имени)';
   el.ext.textContent  = (f.name.match(/\.(\w+)$/)?.[1] || '(нет)').toLowerCase();
@@ -106,69 +109,72 @@ el.file.addEventListener('change', async () => {
   const tail = new Uint8Array(await f.slice(f.size - tailLen, f.size).arrayBuffer());
   el.hex.textContent = toHex(head);
   el.tailhex.textContent = toHex(tail);
+  el.fmt.textContent = detectFormat(head);
 
-  const sigLabel = detectFormat(head);
-  el.fmt.textContent = sigLabel;
-
-  // Preview + dimensions
-  el.wh.textContent = '…';
+  // превью/размеры
   el.preview.innerHTML = '';
-  const url = URL.createObjectURL(f);
+  if (lastImageBlobURL) URL.revokeObjectURL(lastImageBlobURL);
+  lastImageBlobURL = URL.createObjectURL(f);
   const img = new Image();
   img.onload = () => {
-    lastImageDecoded = true;
+    lastDecoded = true;
     el.normalize.disabled = false;
+    el.downloadOriginal.disabled = false;
     el.wh.textContent = `${img.naturalWidth} × ${img.naturalHeight}px`;
     el.preview.append(img);
-    URL.revokeObjectURL(url);
     postSizeChecks(f, img.naturalWidth, img.naturalHeight);
   };
   img.onerror = () => {
-    lastImageDecoded = false;
+    lastDecoded = false;
     el.wh.textContent = '(не декодируется в этом WebView — нормализация недоступна)';
-    URL.revokeObjectURL(url);
     postSizeChecks(f, 0, 0);
   };
-  img.src = url;
+  img.src = lastImageBlobURL;
 
-  // Motion/Live + JPEG mode
+  // детекторы
   const motion = await detectMotionLike(f, head, tail);
   el.motion.textContent = motion.label;
   el.motion.className = 'v status ' + motion.level;
   el.jpegMode.textContent = await jpegMode(f, head);
+
+  // кнопка «Скачать оригинал»
+  el.downloadOriginal.onclick = async () => {
+    const name = (f.name || 'image');
+    forceDownloadBlob(safeName(name), f);
+  };
 });
 
-// Кнопка нормализации
+// нормализация → JPEG
 el.normalize.addEventListener('click', async () => {
   const f = el.file.files && el.file.files[0];
   if (!f) return;
-  if (!lastImageDecoded) {
-    alert('Исходник не декодируется в этом WebView (например, HEIC на Android). Нормализация на клиенте невозможна — сделайте экспорт в JPEG или нормализуйте на сервере.');
+  if (!lastDecoded) {
+    alert('Исходник не декодируется в этом WebView (например, HEIC на Android). Нормализация на клиенте невозможна — экспортируйте в JPEG или нормализуйте на сервере.');
     return;
   }
-  const norm = await normalizeToJpeg(f, 2048, 0.85);
-  if (!norm) { alert('Не удалось нормализовать файл.'); return; }
+  normalizedFile = await normalizeToJpeg(f, 2048, 0.85);
+  if (!normalizedFile) { alert('Не удалось нормализовать файл.'); return; }
 
-  // Показать инфо + превью скачивания
   el.normBox.hidden = false;
-  el.n_name.textContent = norm.name;
-  el.n_mime.textContent = norm.type;
-  el.n_size.textContent = `${norm.size} B ≈ ${(norm.size/1024/1024).toFixed(2)} MB`;
+  el.n_name.textContent = normalizedFile.name;
+  el.n_mime.textContent = normalizedFile.type;
+  el.n_size.textContent = `${normalizedFile.size} B ≈ ${(normalizedFile.size/1024/1024).toFixed(2)} MB`;
 
-  // размер изображения
-  const blobUrl = URL.createObjectURL(norm);
+  // размеры нормализованного
+  const url = URL.createObjectURL(normalizedFile);
   const img2 = new Image();
-  img2.onload = () => {
-    el.n_wh.textContent = `${img2.naturalWidth} × ${img2.naturalHeight}px`;
-    URL.revokeObjectURL(blobUrl);
-  };
-  img2.src = blobUrl;
-
-  el.download.href = URL.createObjectURL(norm);
-  el.download.download = (f.name || 'image').replace(/\.\w+$/, '') + '.jpg';
+  img2.onload = () => { el.n_wh.textContent = `${img2.naturalWidth} × ${img2.naturalHeight}px`; URL.revokeObjectURL(url); };
+  img2.src = url;
 });
 
-// ---------- helpers ----------
+// Кнопка «Скачать JPEG» — принудительное скачивание везде
+el.downloadNorm.addEventListener('click', () => {
+  if (!normalizedFile) return;
+  forceDownloadBlob(normalizedFile.name || 'image.jpg', normalizedFile);
+});
+
+/* ---------- helpers ---------- */
+
 function toHex(u8){ return [...u8].map(b=>b.toString(16).padStart(2,'0')).join(' '); }
 
 function detectFormat(u8){
@@ -191,12 +197,10 @@ async function detectMotionLike(file, head, tail){
   const mime = (file.type||'').toLowerCase();
   const ext  = (file.name.match(/\.(\w+)$/)?.[1] || '').toLowerCase();
 
-  // HEIC → вероятен Live (видео отдельно)
   if (/heic|heif/.test(mime) || /heic|heif/.test(ext)) {
     return { label:'HEIC: возможен Live Photo (видео — отдельный MOV)', level:'warn' };
   }
 
-  // JPEG: XMP
   if (!(head[0]===0xff && head[1]===0xd8 && head[2]===0xff))
     return { label:'обычное фото (признаков нет)', level:'ok' };
 
@@ -210,17 +214,13 @@ async function detectMotionLike(file, head, tail){
       return { label:'Подозрение: iOS Live Photo (признаки в XMP/EXIF)', level:'warn' };
     }
   }
-
-  // Хвост JPEG содержит MP4-боксы → Motion без XMP
   const tailStr = new TextDecoder().decode(tail);
   const hasMP4Box = /ftyp|moov|mdat|mp4|isom|iso5|heic/i.test(tailStr);
-  if (hasMP4Box) {
-    return { label:'НАЙДЕНО: Motion-хвост в JPEG (без XMP)', level:'bad' };
-  }
+  if (hasMP4Box) return { label:'НАЙДЕНО: Motion-хвост JPEG (без XMP)', level:'bad' };
+
   return { label:'обычное фото (признаков нет)', level:'ok' };
 }
 
-// Извлекаем XMP из JPEG (APP1 с префиксом XMP)
 async function extractXmpFromJpeg(file, maxBytes){
   const buf = new Uint8Array(await file.slice(0, maxBytes).arrayBuffer());
   let i = 2; // SOI
@@ -241,7 +241,6 @@ async function extractXmpFromJpeg(file, maxBytes){
   return null;
 }
 
-// Определяем baseline/progressive по SOF-маркерам
 async function jpegMode(file, head){
   const isJpeg = head[0]===0xff && head[1]===0xd8 && head[2]===0xff;
   if (!isJpeg) return '—';
@@ -259,7 +258,6 @@ async function jpegMode(file, head){
   return 'Не удалось определить';
 }
 
-// Эвристика «аномальный вес» после получения размеров
 function postSizeChecks(file, w, h){
   if (!w || !h) { el.weight.textContent = 'недоступно (нет размеров)'; el.weight.className='v status warn'; return; }
   const bpp = file.size / (w*h);
@@ -269,23 +267,19 @@ function postSizeChecks(file, w, h){
   el.weight.textContent = label; el.weight.className = 'v status ' + cls;
 }
 
-// Нормализация: canvas → JPEG (≤ maxSide, quality)
 async function normalizeToJpeg(file, maxSide=2048, quality=0.85){
   return new Promise((resolve) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
-      // масштаб
-      let {naturalWidth:w, naturalHeight:h} = img;
+      let w = img.naturalWidth, h = img.naturalHeight;
       const scale = Math.min(1, maxSide / Math.max(w,h));
       const W = Math.max(1, Math.round(w * scale));
       const H = Math.max(1, Math.round(h * scale));
-
       const canvas = document.createElement('canvas');
       canvas.width = W; canvas.height = H;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, W, H);
-
       canvas.toBlob((blob) => {
         URL.revokeObjectURL(url);
         if (!blob) return resolve(null);
@@ -296,6 +290,41 @@ async function normalizeToJpeg(file, maxSide=2048, quality=0.85){
     img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
     img.src = url;
   });
+}
+
+/* ---------- принудительное скачивание: работает в iOS/Android/WebView/десктоп ---------- */
+function forceDownloadBlob(filename, blob){
+  filename = safeName(filename);
+  try {
+    if (window.navigator && 'msSaveOrOpenBlob' in window.navigator) {
+      // старый Edge/IE
+      window.navigator.msSaveOrOpenBlob(blob, filename);
+      return;
+    }
+  } catch(e){ /* ignore */ }
+
+  const url = URL.createObjectURL(blob);
+
+  // современный способ: скрытая ссылка с download
+  const a = document.createElement('a');
+  a.style.display = 'none';
+  a.rel = 'noopener';
+  a.href = url;
+  a.download = filename;
+  a.target = '_self';            // важно для iOS/Android — не открывать превью
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  // подстраховка: если браузер проигнорировал download (старый iOS WebView)
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 1500);
+}
+
+function safeName(name){
+  const base = (name || 'image.jpg').replace(/[\/\\:*?"<>|]+/g,'_');
+  return base.trim() || 'image.jpg';
 }
 </script>
 </body>
