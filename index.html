@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Проверка фото (HEIC/AVIF/JPEG и т.п.)</title>
+<style>
+  :root{--bg:#0b0f14;--fg:#e9eef4;--mut:#9fb3c8;--card:#131a22;--ok:#2aa198;--bad:#ff6b6b}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Arial}
+  .wrap{max-width:900px;margin:0 auto;padding:20px}
+  h1{font-size:20px;margin:0 0 10px}
+  p{color:var(--mut);margin:0 0 16px}
+  .card{background:var(--card);border-radius:16px;padding:16px;box-shadow:0 6px 24px rgba(0,0,0,.3);margin:12px 0}
+  input[type=file]{width:100%;border:1px dashed #3a5068;border-radius:12px;padding:14px;background:rgba(255,255,255,.02);color:var(--fg)}
+  .grid{display:grid;grid-template-columns:1fr;gap:10px}
+  .row{display:flex;justify-content:space-between;gap:12px}
+  .k{color:var(--mut)}
+  .v{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
+  .sig{word-break:break-all}
+  .status.ok{color:var(--ok)} .status.bad{color:var(--bad)}
+  img,canvas{max-width:100%;height:auto;border-radius:12px;background:#000}
+  .btn{display:inline-block;margin-top:8px;padding:10px 14px;border-radius:12px;background:#1e2936;color:#dce7f3;text-decoration:none;border:1px solid #33475f}
+  .small{font-size:12px;color:var(--mut)}
+  @media (min-width:700px){.grid{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Проверка фото на устройстве</h1>
+  <p>Выберите изображение из камеры, медиатеки или файлов. Мы покажем фактический формат по «магическим байтам», даже если расширение <code>.jpg</code>, а внутри HEIC/AVIF.</p>
+
+  <div class="card">
+    <input id="file" type="file" accept="image/*" />
+    <label class="small">Совет: на iOS/Android появится меню выбора камеры / фото / файлов.</label>
+  </div>
+
+  <div id="out" class="grid" hidden>
+    <div class="card">
+      <h2 style="margin-top:0">Сводка</h2>
+      <div class="row"><span class="k">Имя файла</span><span id="name" class="v"></span></div>
+      <div class="row"><span class="k">Расширение</span><span id="ext" class="v"></span></div>
+      <div class="row"><span class="k">MIME (от браузера)</span><span id="mime" class="v"></span></div>
+      <div class="row"><span class="k">Размер</span><span id="size" class="v"></span></div>
+      <div class="row"><span class="k">Последнее изменение</span><span id="lm" class="v"></span></div>
+      <div class="row"><span class="k">Определённый формат (по сигнатуре)</span><span id="fmt" class="v status"></span></div>
+      <div class="row"><span class="k">Пиксели (если декодируется)</span><span id="wh" class="v"></span></div>
+      <div class="row"><span class="k">Первые байты (hex)</span></div>
+      <div class="sig v" id="hex"></div>
+      <a id="copy" class="btn" href="#">Скопировать отчёт</a>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">Превью</h2>
+      <div id="previewWrap">
+        <p class="small">Если формат не поддерживается WebView, превью может не отобразиться — это уже косвенное подтверждение.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = sel => document.querySelector(sel);
+const input = $('#file');
+const out = $('#out');
+const el = {
+  name: $('#name'), ext: $('#ext'), mime: $('#mime'), size: $('#size'),
+  lm: $('#lm'), fmt: $('#fmt'), wh: $('#wh'), hex: $('#hex'),
+  copy: $('#copy'), previewWrap: $('#previewWrap')
+};
+
+input.addEventListener('change', async () => {
+  const f = input.files && input.files[0];
+  if (!f) return;
+  out.hidden = false;
+
+  // Базовые поля
+  el.name.textContent = f.name || '(без имени)';
+  el.ext.textContent  = (f.name.match(/\.(\w+)$/)?.[1] || '(нет)').toLowerCase();
+  el.mime.textContent = f.type || '(пусто)';
+  el.size.textContent = `${f.size} B  ≈ ${(f.size/1024/1024).toFixed(2)} MB`;
+  el.lm.textContent   = f.lastModified ? new Date(f.lastModified).toLocaleString() : '(нет данных)';
+
+  // Читаем первые 32 байта
+  const headLen = 32;
+  const buf = await f.slice(0, headLen).arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  el.hex.textContent = [...bytes].map(b => b.toString(16).padStart(2,'0')).join(' ');
+
+  // Определяем формат по сигнатуре
+  const sig = detectFormat(bytes);
+  el.fmt.textContent = sig.label;
+  el.fmt.className = 'v status ' + (sig.suspicious ? 'bad' : 'ok');
+
+  // Пытаемся узнать размеры:
+  el.wh.textContent = '...';
+  try {
+    // createImageBitmap быстрее, но не везде доступен
+    const blobUrl = URL.createObjectURL(f);
+    const img = new Image();
+    img.onload = () => {
+      el.wh.textContent = `${img.naturalWidth} × ${img.naturalHeight}px`;
+      showPreview(img);
+      URL.revokeObjectURL(blobUrl);
+    };
+    img.onerror = () => {
+      el.wh.textContent = '(не удалось декодировать — формат не поддерживается WebView)';
+      showPreview(null);
+      URL.revokeObjectURL(blobUrl);
+    };
+    img.src = blobUrl;
+  } catch (e) {
+    el.wh.textContent = '(ошибка получения размеров)';
+  }
+
+  // Кнопка "скопировать отчёт"
+  el.copy.onclick = (ev) => {
+    ev.preventDefault();
+    const report = buildReport(f, sig, el.hex.textContent, el.wh.textContent);
+    navigator.clipboard?.writeText(report).then(()=> {
+      el.copy.textContent = 'Скопировано ✓';
+      setTimeout(()=> el.copy.textContent='Скопировать отчёт', 1200);
+    }).catch(()=> alert('Не удалось скопировать'));
+  };
+});
+
+function buildReport(f, sig, hex, wh) {
+  return [
+    `Имя: ${f.name}`,
+    `Расширение: ${(f.name.match(/\.(\w+)$/)?.[1] || '(нет)').toLowerCase()}`,
+    `MIME (браузер): ${f.type || '(пусто)'}`,
+    `Размер: ${f.size} B  ≈ ${(f.size/1024/1024).toFixed(2)} MB`,
+    `Последнее изменение: ${f.lastModified ? new Date(f.lastModified).toISOString() : '(нет)'}`,
+    `Формат по сигнатуре: ${sig.label}`,
+    `Подозрительно: ${sig.suspicious ? 'Да' : 'Нет'}`,
+    `Пиксели: ${wh}`,
+    `HEX(первые 32 байта): ${hex}`
+  ].join('\n');
+}
+
+// Вывод превью (если возможно)
+function showPreview(img) {
+  el.previewWrap.innerHTML = '';
+  if (img) {
+    img.style.maxWidth = '100%';
+    img.style.borderRadius = '12px';
+    el.previewWrap.append(img);
+  } else {
+    const p = document.createElement('p');
+    p.className = 'small';
+    p.textContent = 'Превью недоступно: формат не декодируется в данном WebView.';
+    el.previewWrap.append(p);
+  }
+}
+
+/**
+ * Определение формата по магическим байтам.
+ * Возвращает { label, suspicious }.
+ * suspicious=true — когда расширение/браузерный MIME не совпадают с фактической сигнатурой (например, .jpg, но HEIC/AVIF внутри)
+ */
+function detectFormat(u8) {
+  const asStr = (start,len) => String.fromCharCode(...u8.slice(start, start+len));
+
+  // JPEG: FF D8 FF
+  if (u8[0] === 0xFF && u8[1] === 0xD8 && u8[2] === 0xFF)
+    return mk('JPEG');
+
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (u8[0]===0x89 && u8[1]===0x50 && u8[2]===0x4E && u8[3]===0x47)
+    return mk('PNG');
+
+  // GIF: 47 49 46 38
+  if (asStr(0,3)==='GIF')
+    return mk('GIF');
+
+  // WEBP: RIFF....WEBP
+  if (asStr(0,4)==='RIFF' && asStr(8,4)==='WEBP')
+    return mk('WEBP', isSusp('webp'));
+
+  // AVIF/HEIC/HEIF: ISOBMFF with ftyp brand
+  if (asStr(4,4)==='ftyp') {
+    const brand = asStr(8,4);
+    const heifBrands = ['heic','heix','heis','hevc','hevx','mif1','msf1','heim','heis'];
+    const avifBrands = ['avif','avis'];
+    if (heifBrands.includes(brand)) return mk(`HEIC/HEIF (ftyp ${brand})`, isSusp('heic'));
+    if (avifBrands.includes(brand)) return mk(`AVIF (ftyp ${brand})`, isSusp('avif'));
+    return mk(`ISOBMFF (ftyp ${brand})`, true); // контейнер ISO BMFF — возможны варианты
+  }
+
+  // BMP
+  if (u8[0]===0x42 && u8[1]===0x4D) return mk('BMP');
+
+  // Неизвестно
+  return mk('Неизвестно', true);
+
+  function mk(label, suspicious = mismatchWithNameOrMime(label)) {
+    return { label, suspicious };
+  }
+  function mismatchWithNameOrMime(label){
+    const f = input.files && input.files[0];
+    if (!f) return false;
+    const nameExt = (f.name.match(/\.(\w+)$/)?.[1]||'').toLowerCase();
+    const mime = (f.type||'').toLowerCase();
+    const lbl = label.toLowerCase();
+
+    // если браузер говорит jpeg/png, но сигнатура heic/avif — подозрительно
+    if ((/jpeg|jpg/.test(nameExt) || /jpeg|jpg/.test(mime)) && /heic|avif|isobmff|heif/.test(lbl)) return true;
+    if ((/png/.test(nameExt) || /png/.test(mime)) && /heic|avif|webp/.test(lbl)) return true;
+
+    // пустой mime — уже повод
+    if (!mime) return true;
+
+    return false;
+  }
+  function isSusp(kind){
+    const f = input.files && input.files[0];
+    if (!f) return true;
+    const ext = (f.name.match(/\.(\w+)$/)?.[1]||'').toLowerCase();
+    const mime = (f.type||'').toLowerCase();
+    return !mime.includes(kind) || (ext && !ext.includes(kind));
+  }
+}
+</script>
+</body>
+</html>
